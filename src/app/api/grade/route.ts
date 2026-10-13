@@ -3,6 +3,89 @@ import { GradingRequest, GradingResult } from "@/types/grading";
 
 export const maxDuration = 60; // Allow sufficient time for Vision AI on Vercel Pro/Hobby
 
+interface ModelCandidate {
+  apiVersion: "v1beta" | "v1";
+  modelName: string;
+}
+
+// Fungsi cerdas untuk mendeteksi model yang benar-benar aktif untuk API Key ini
+async function resolveWorkingModels(apiKey: string): Promise<ModelCandidate[]> {
+  const candidates: ModelCandidate[] = [];
+
+  // 1. Coba deteksi via ListModels di v1beta
+  try {
+    const resBeta = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
+    );
+    if (resBeta.ok) {
+      const data = await resBeta.json();
+      const models: any[] = data.models || [];
+      const supported = models
+        .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
+        .map((m) => m.name.replace(/^models\//, ""));
+
+      // Urutkan berdasarkan model multimodal terbaik
+      const scoreModel = (name: string) => {
+        if (name.includes("2.5-flash")) return 100;
+        if (name === "gemini-2.0-flash") return 90;
+        if (name.includes("2.0-flash")) return 85;
+        if (name === "gemini-1.5-flash-latest") return 80;
+        if (name === "gemini-1.5-flash") return 75;
+        if (name.includes("1.5-flash")) return 70;
+        if (name.includes("flash")) return 60;
+        if (name.includes("1.5-pro")) return 50;
+        if (name.includes("pro")) return 40;
+        return 10;
+      };
+
+      supported.sort((a, b) => scoreModel(b) - scoreModel(a));
+
+      for (const name of supported) {
+        candidates.push({ apiVersion: "v1beta", modelName: name });
+      }
+    }
+  } catch (err) {
+    console.warn("Gagal mengecek v1beta ListModels:", err);
+  }
+
+  // 2. Coba deteksi via ListModels di v1 (jika v1beta tidak mengembalikan)
+  if (candidates.length === 0) {
+    try {
+      const resV1 = await fetch(
+        `https://generativelanguage.googleapis.com/v1/models?key=${apiKey}`
+      );
+      if (resV1.ok) {
+        const data = await resV1.json();
+        const models: any[] = data.models || [];
+        const supported = models
+          .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
+          .map((m) => m.name.replace(/^models\//, ""));
+
+        for (const name of supported) {
+          candidates.push({ apiVersion: "v1", modelName: name });
+        }
+      }
+    } catch (err) {
+      console.warn("Gagal mengecek v1 ListModels:", err);
+    }
+  }
+
+  // 3. Fallback daftar model umum jika ListModels diblokir/gagal
+  if (candidates.length === 0) {
+    return [
+      { apiVersion: "v1beta", modelName: "gemini-2.0-flash" },
+      { apiVersion: "v1beta", modelName: "gemini-1.5-flash-latest" },
+      { apiVersion: "v1", modelName: "gemini-1.5-flash" },
+      { apiVersion: "v1beta", modelName: "gemini-2.0-flash-exp" },
+      { apiVersion: "v1beta", modelName: "gemini-1.5-flash-002" },
+      { apiVersion: "v1beta", modelName: "gemini-1.5-pro-latest" },
+      { apiVersion: "v1", modelName: "gemini-1.5-pro" },
+    ];
+  }
+
+  return candidates;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body: GradingRequest = await req.json();
@@ -25,7 +108,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           error:
-            "API Key Google Gemini belum dikonfigurasi. Masukkan API Key di pengaturan web atau setel GEMINI_API_KEY di environment variables Vercel.",
+            "API Key Google Gemini belum diisi. Silakan klik tombol 'Set API Key' di pojok kanan atas atau atur variabel GEMINI_API_KEY di Vercel.",
         },
         { status: 400 }
       );
@@ -77,7 +160,7 @@ Langkah yang WAJIB kamu lakukan:
    - Hitung skor proporsional (0 - ${maxScore}).
 5. Berikan feedback yang ramah dan mendidik untuk siswa, serta catatan teknis untuk guru.
 
-Kembalikan respon HANYA dalam format JSON murni (valid JSON tanpa teks pembuka/penutup, tanpa markdown backticks \`\`\`json):
+Kembalikan respon HANYA dalam format JSON murni (valid JSON tanpa markdown backticks):
 {
   "studentTranscription": "Teks bahasa Arab digital hasil pembacaan tulisan tangan siswa",
   "transcriptionConfidence": "high" | "medium" | "low",
@@ -121,55 +204,68 @@ Kembalikan respon HANYA dalam format JSON murni (valid JSON tanpa teks pembuka/p
 }
 `;
 
-    // Coba model multimodal: prioritaskan gemini-2.5-flash, fallback ke gemini-2.0-flash / gemini-1.5-flash
-    const modelsToTry = [
-      "gemini-2.5-flash",
-      "gemini-2.0-flash",
-      "gemini-1.5-flash",
-    ];
+    // Deteksi daftar model yang tersedia untuk API key ini
+    const availableModels = await resolveWorkingModels(apiKey);
+    console.log(
+      "Daftar model yang akan dicoba:",
+      availableModels.map((m) => `${m.apiVersion}/${m.modelName}`)
+    );
 
-    let lastError: any = null;
+    let lastErrorDetails = "";
     let resultJson: GradingResult | null = null;
 
-    for (const modelName of modelsToTry) {
+    for (const { apiVersion, modelName } of availableModels) {
       try {
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              contents: [
+        const url = `https://generativelanguage.googleapis.com/${apiVersion}/models/${modelName}:generateContent?key=${apiKey}`;
+
+        const payload = {
+          contents: [
+            {
+              role: "user",
+              parts: [
                 {
-                  role: "user",
-                  parts: [
-                    {
-                      text: systemPrompt,
-                    },
-                    {
-                      inline_data: {
-                        mime_type: imageMimeType,
-                        data: cleanBase64,
-                      },
-                    },
-                  ],
+                  text: systemPrompt,
+                },
+                {
+                  inlineData: {
+                    mimeType: imageMimeType,
+                    data: cleanBase64,
+                  },
                 },
               ],
-              generationConfig: {
-                temperature: 0.1, // Rendah agar evaluasi konsisten & objektif
-                response_mime_type: "application/json",
-              },
-            }),
-          }
-        );
+            },
+          ],
+          generationConfig: {
+            temperature: 0.1,
+            responseMimeType: "application/json",
+          },
+        };
+
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
 
         if (!response.ok) {
           const errData = await response.text();
-          console.warn(`Model ${modelName} failed with:`, errData);
-          lastError = new Error(`Gemini API (${modelName}) error: ${errData}`);
-          continue; // coba model berikutnya
+          console.warn(`Model ${apiVersion}/${modelName} gagal:`, errData);
+
+          // Cek jika API key tidak valid sama sekali
+          if (errData.includes("API_KEY_INVALID") || response.status === 400 && errData.includes("key")) {
+            return NextResponse.json(
+              {
+                error:
+                  "API Key Google Gemini tidak valid. Harap periksa kembali API Key dari Google AI Studio (https://aistudio.google.com/).",
+              },
+              { status: 400 }
+            );
+          }
+
+          lastErrorDetails = errData;
+          continue; // coba kandidat model berikutnya
         }
 
         const data = await response.json();
@@ -177,29 +273,26 @@ Kembalikan respon HANYA dalam format JSON murni (valid JSON tanpa teks pembuka/p
           data.candidates?.[0]?.content?.parts?.[0]?.text;
 
         if (!candidateText) {
-          throw new Error("Respon kosong dari AI model.");
+          throw new Error("Respon teks kosong dari AI model.");
         }
 
-        // Parse JSON
-        const cleanedText = candidateText
-          .replace(/```json/g, "")
-          .replace(/```/g, "")
-          .trim();
+        // Ekstrak blok JSON dengan aman (mengantisipasi jika ada wrapper markdown ```json)
+        const jsonMatch = candidateText.match(/\{[\s\S]*\}/);
+        const jsonString = jsonMatch ? jsonMatch[0] : candidateText;
 
-        resultJson = JSON.parse(cleanedText);
-        break; // Berhasil! Keluar dari loop model
+        resultJson = JSON.parse(jsonString);
+        console.log(`Berhasil dikoreksi menggunakan model: ${apiVersion}/${modelName}`);
+        break; // Sukses! Keluar dari perulangan
       } catch (err: any) {
-        console.warn(`Attempt with ${modelName} encountered error:`, err);
-        lastError = err;
+        console.warn(`Percobaan dengan ${apiVersion}/${modelName} error:`, err);
+        lastErrorDetails = err.message || String(err);
       }
     }
 
     if (!resultJson) {
       return NextResponse.json(
         {
-          error:
-            lastError?.message ||
-            "Gagal memproses gambar ujian dengan AI. Pastikan format gambar valid dan API Key aktif.",
+          error: `Gagal memproses penilaian dengan AI. Detail error: ${lastErrorDetails || "Model tidak merespon."}`,
         },
         { status: 500 }
       );
