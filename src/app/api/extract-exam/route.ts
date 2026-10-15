@@ -7,18 +7,10 @@ export const maxDuration = 60;
 export async function POST(req: NextRequest) {
   try {
     const body: ExtractExamRequest = await req.json();
-    const { fileBase64, fileMimeType, fileName, customApiKey } = body;
-
-    const apiKey = customApiKey?.trim() || process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json(
-        { error: "API Key Google Gemini belum diatur. Masukkan API Key di pengaturan web atau setel GEMINI_API_KEY di Vercel." },
-        { status: 400 }
-      );
-    }
+    const { fileBase64, fileMimeType, fileName } = body;
 
     if (!fileBase64) {
-      return NextResponse.json({ error: "File dokumen soal wajib diunggah." }, { status: 400 } );
+      return NextResponse.json({ error: "File dokumen soal wajib diunggah." }, { status: 400 });
     }
 
     const cleanBase64 = fileBase64.replace(/^data:[^;]+;base64,/, "");
@@ -48,7 +40,6 @@ export async function POST(req: NextRequest) {
         );
       }
     } else {
-      // PDF atau format dokumen gambar/scan
       const mime = fileMimeType || (fileName?.toLowerCase().endsWith(".pdf") ? "application/pdf" : "image/jpeg");
       fileParts = [{ mimeType: mime, data: cleanBase64 }];
     }
@@ -61,7 +52,7 @@ Tugasmu:
 1. Temukan judul ujian atau mata pelajaran dari dokumen.
 2. Identifikasi setiap nomor soal beserta teks pertanyaan dan kunci jawaban yang tepat untuk nomor tersebut.
 3. Jika pada dokumen kunci jawaban diletakkan terpisah (misalnya di bagian akhir atau di bawah soal), satukan kunci jawaban tersebut ke masing-masing nomor soal yang sesuai.
-4. Tentukan bobot nilai default (misalnya total skor 100 dibagi jumlah soal, bulatkan ke angka bulat atau desimal wajar).
+4. Tentukan bobot nilai default (misalnya total skor 100 dibagi jumlah soal).
 5. Pastikan teks pertanyaan dan kunci jawaban dalam bahasa Arab ditulis dengan benar dan jelas.
 
 Kembalikan respon HANYA dalam format JSON valid:
@@ -82,13 +73,11 @@ Kembalikan respon HANYA dalam format JSON valid:
 `;
 
     const extracted = await callGeminiJson<ExtractExamResponse>(
-      apiKey,
       prompt,
       fileParts.length > 0 ? fileParts : undefined,
       textContent ? [`Isi dokumen teks ujian:\n\n${textContent}`] : undefined
     );
 
-    // Normalisasi bobot jika maxScore belum ada atau jumlahnya belum 100
     if (extracted.questions && extracted.questions.length > 0) {
       const count = extracted.questions.length;
       const defaultScore = Math.floor(100 / count);

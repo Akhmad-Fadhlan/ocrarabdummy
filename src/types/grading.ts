@@ -14,7 +14,16 @@ export interface ExtractExamRequest {
   fileBase64: string;
   fileMimeType: string;
   fileName: string;
-  customApiKey?: string;
+}
+
+export interface ExtractSeparateExamRequest {
+  questionFileBase64?: string;
+  questionFileMimeType?: string;
+  questionFileName?: string;
+
+  answerKeyFileBase64?: string;
+  answerKeyFileMimeType?: string;
+  answerKeyFileName?: string;
 }
 
 export interface ExtractExamResponse {
@@ -47,7 +56,6 @@ export interface BatchGradingRequest {
   studentFileName: string;
   mode: GradingMode;
   harakatRule: HarakatRule;
-  customApiKey?: string;
 }
 
 export interface BatchGradingResult {
@@ -74,7 +82,6 @@ export interface GradingRequest {
   mode: GradingMode;
   harakatRule: HarakatRule;
   maxScore?: number;
-  customApiKey?: string;
 }
 
 export interface RubricItem {

@@ -14,16 +14,7 @@ export async function POST(req: NextRequest) {
       studentFileName,
       mode = "semantic_argument",
       harakatRule = "ignore",
-      customApiKey,
     } = body;
-
-    const apiKey = customApiKey?.trim() || process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json(
-        { error: "API Key Google Gemini belum diatur. Masukkan API Key di pengaturan web atau setel GEMINI_API_KEY di Vercel." },
-        { status: 400 }
-      );
-    }
 
     if (!questions || questions.length === 0) {
       return NextResponse.json(
@@ -122,7 +113,7 @@ PETUNJUK PEMERIKSAAN PER NOMOR SOAL:
 5. Jelaskan analisis semantik argumennya dan berikan umpan balik yang membangun untuk siswa.
 6. Hitung total skor akhir yang diperoleh siswa beserta rekapitulasi jumlah soal benar, benar sebagian, dan salah.
 
-Kembalikan HANYA format JSON valid tanpa markdown backticks:
+Kembalikan HANYA format JSON valid tanpa tanda markdown:
 {
   "totalScore": 85,
   "maxTotalScore": ${maxTotalScore},
@@ -155,7 +146,6 @@ Kembalikan HANYA format JSON valid tanpa markdown backticks:
 `;
 
     const gradingResult = await callGeminiJson<BatchGradingResult>(
-      apiKey,
       systemPrompt,
       fileParts.length > 0 ? fileParts : undefined,
       textContent
@@ -163,7 +153,6 @@ Kembalikan HANYA format JSON valid tanpa markdown backticks:
         : undefined
     );
 
-    // Pastikan perhitungan persentase tepat
     if (gradingResult.maxTotalScore > 0) {
       gradingResult.percentage = Math.round(
         (gradingResult.totalScore / gradingResult.maxTotalScore) * 100
